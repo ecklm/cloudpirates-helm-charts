@@ -272,6 +272,66 @@ jobs:
       - name: Update ArtifactHub changes annotations
         id: update-ah-changes
         if: steps.charts-to-update.outputs.changed == 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+          AH_PYTHON_SCRIPT: |
+            import subprocess, re, os, sys
+
+            chart_name = os.environ['AH_CHART_NAME']
+            chart_dir = os.environ['AH_CHART_DIR']
+            commit_range = os.environ['AH_COMMIT_RANGE']
+            repo = os.environ['AH_REPO']
+
+            result = subprocess.run(
+                ["git", "log", commit_range, "--oneline", "--no-merges", "--", chart_dir],
+                capture_output=True, text=True
+            )
+
+            changes = []
+            for line in result.stdout.strip().split('\n'):
+                if not line.strip():
+                    continue
+                parts = line.split(' ', 1)
+                if len(parts) < 2:
+                    continue
+                hash_, msg = parts
+
+                if re.search(r'(chore:.*changelog|auto-generate.*schema|regenerate.*changelog|reset.*changelog)', msg, re.I):
+                    continue
+
+                msg = re.sub(rf'^\[{re.escape(chart_name)}\][:\s]+', '', msg, flags=re.I)
+                msg = re.sub(r'^\[all\][:\s]+', '', msg, flags=re.I)
+                msg = msg.strip()
+                if not msg:
+                    continue
+
+                kind = 'changed'
+                if re.search(r'\b(fix(es|ed)?|bugfix)\b', msg, re.I):
+                    kind = 'fixed'
+                elif re.search(r'\b(add(s|ed)?|new|feat(ure)?)\b', msg, re.I):
+                    kind = 'added'
+                elif re.search(r'\bsecurity\b', msg, re.I):
+                    kind = 'security'
+                elif re.search(r'\b(remov(es|ed)?|delet(es|ed)?)\b', msg, re.I):
+                    kind = 'removed'
+                elif re.search(r'\bdeprecate(s|d)?\b', msg, re.I):
+                    kind = 'deprecated'
+
+                desc = msg.replace('"', '\\"')
+                changes.append((kind, desc, hash_))
+
+            if not changes:
+                sys.exit(0)
+
+            lines = []
+            for kind, desc, hash_ in changes:
+                lines.append(f'- kind: {kind}')
+                lines.append(f'  description: "{desc}"')
+                lines.append(f'  links:')
+                lines.append(f'    - name: "GitHub Commit"')
+                lines.append(f'      url: "https://github.com/{repo}/commit/{hash_}"')
+
+            print('\n'.join(lines))
         run: |
           set -e
           IFS=',' read -ra CHARTS <<< "${{ steps.charts-to-update.outputs.changedCharts }}"
@@ -307,68 +367,9 @@ jobs:
             export AH_CHART_NAME="$CHART_NAME"
             export AH_CHART_DIR="$CHART_DIR"
             export AH_COMMIT_RANGE="$COMMIT_RANGE"
-            export AH_REPO="${{ github.repository }}"
+            export AH_REPO="$GH_REPO"
 
-            CHANGES_YAML=$(python3 - << 'PYEOF'
-import subprocess, re, os, sys
-
-chart_name = os.environ['AH_CHART_NAME']
-chart_dir = os.environ['AH_CHART_DIR']
-commit_range = os.environ['AH_COMMIT_RANGE']
-repo = os.environ['AH_REPO']
-
-result = subprocess.run(
-    ["git", "log", commit_range, "--oneline", "--no-merges", "--", chart_dir],
-    capture_output=True, text=True
-)
-
-changes = []
-for line in result.stdout.strip().split('\n'):
-    if not line.strip():
-        continue
-    parts = line.split(' ', 1)
-    if len(parts) < 2:
-        continue
-    hash_, msg = parts
-
-    if re.search(r'(chore:.*changelog|auto-generate.*schema|regenerate.*changelog|reset.*changelog)', msg, re.I):
-        continue
-
-    msg = re.sub(rf'^\[{re.escape(chart_name)}\][:\s]+', '', msg, flags=re.I)
-    msg = re.sub(r'^\[all\][:\s]+', '', msg, flags=re.I)
-    msg = msg.strip()
-    if not msg:
-        continue
-
-    kind = 'changed'
-    if re.search(r'\b(fix(es|ed)?|bugfix)\b', msg, re.I):
-        kind = 'fixed'
-    elif re.search(r'\b(add(s|ed)?|new|feat(ure)?)\b', msg, re.I):
-        kind = 'added'
-    elif re.search(r'\bsecurity\b', msg, re.I):
-        kind = 'security'
-    elif re.search(r'\b(remov(es|ed)?|delet(es|ed)?)\b', msg, re.I):
-        kind = 'removed'
-    elif re.search(r'\bdeprecate(s|d)?\b', msg, re.I):
-        kind = 'deprecated'
-
-    desc = msg.replace('"', '\\"')
-    changes.append((kind, desc, hash_))
-
-if not changes:
-    sys.exit(0)
-
-lines = []
-for kind, desc, hash_ in changes:
-    lines.append(f'- kind: {kind}')
-    lines.append(f'  description: "{desc}"')
-    lines.append(f'  links:')
-    lines.append(f'    - name: "GitHub Commit"')
-    lines.append(f'      url: "https://github.com/{repo}/commit/{hash_}"')
-
-print('\n'.join(lines))
-PYEOF
-            )
+            CHANGES_YAML=$(echo "$AH_PYTHON_SCRIPT" | python3 -)
 
             if [ -n "$CHANGES_YAML" ]; then
               export CHANGES_YAML
