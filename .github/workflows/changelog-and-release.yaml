@@ -287,49 +287,53 @@ jobs:
                 capture_output=True, text=True
             )
 
-            changes = []
+            # Find the first (most recent) non-maintenance commit — this is the PR title
+            title = None
             for line in result.stdout.strip().split('\n'):
                 if not line.strip():
                     continue
                 parts = line.split(' ', 1)
                 if len(parts) < 2:
                     continue
-                hash_, msg = parts
-
+                _, msg = parts
                 if re.search(r'(chore:.*changelog|auto-generate.*schema|regenerate.*changelog|reset.*changelog)', msg, re.I):
                     continue
-
                 msg = re.sub(rf'^\[{re.escape(chart_name)}\][:\s]+', '', msg, flags=re.I)
                 msg = re.sub(r'^\[all\][:\s]+', '', msg, flags=re.I)
                 msg = msg.strip()
-                if not msg:
-                    continue
+                if msg:
+                    title = msg
+                    break
 
-                kind = 'changed'
-                if re.search(r'\b(fix(es|ed)?|bugfix)\b', msg, re.I):
-                    kind = 'fixed'
-                elif re.search(r'\b(add(s|ed)?|new|feat(ure)?)\b', msg, re.I):
-                    kind = 'added'
-                elif re.search(r'\bsecurity\b', msg, re.I):
-                    kind = 'security'
-                elif re.search(r'\b(remov(es|ed)?|delet(es|ed)?)\b', msg, re.I):
-                    kind = 'removed'
-                elif re.search(r'\bdeprecate(s|d)?\b', msg, re.I):
-                    kind = 'deprecated'
-
-                desc = msg.replace('"', '\\"')
-                changes.append((kind, desc, hash_))
-
-            if not changes:
+            if not title:
                 sys.exit(0)
 
+            # Extract PR number from title if present (e.g. "Fix something (#123)")
+            pr_match = re.search(r'\(#(\d+)\)$', title)
+            pr_num = pr_match.group(1) if pr_match else None
+            title = re.sub(r'\s*\(#\d+\)$', '', title).strip()
+
+            kind = 'changed'
+            if re.search(r'\b(fix(es|ed)?|bugfix)\b', title, re.I):
+                kind = 'fixed'
+            elif re.search(r'\b(add(s|ed)?|new|feat(ure)?)\b', title, re.I):
+                kind = 'added'
+            elif re.search(r'\bsecurity\b', title, re.I):
+                kind = 'security'
+            elif re.search(r'\b(remov(es|ed)?|delet(es|ed)?)\b', title, re.I):
+                kind = 'removed'
+            elif re.search(r'\bdeprecate(s|d)?\b', title, re.I):
+                kind = 'deprecated'
+
             lines = []
-            for kind, desc, hash_ in changes:
-                lines.append(f'- kind: {kind}')
-                lines.append(f'  description: "{desc}"')
-                lines.append(f'  links:')
-                lines.append(f'    - name: "GitHub Commit"')
-                lines.append(f'      url: "https://github.com/{repo}/commit/{hash_}"')
+            lines.append(f'- kind: {kind}')
+            lines.append(f'  description: "{title.replace(chr(34), chr(92)+chr(34))}"')
+            lines.append(f'  links:')
+            if pr_num:
+                lines.append(f'    - name: "Pull Request"')
+                lines.append(f'      url: "https://github.com/{repo}/pull/{pr_num}"')
+            lines.append(f'    - name: "Changelog"')
+            lines.append(f'      url: "https://github.com/{repo}/blob/main/charts/{chart_name}/CHANGELOG.md"')
 
             print('\n'.join(lines))
         run: |
